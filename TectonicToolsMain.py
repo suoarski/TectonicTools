@@ -15,6 +15,33 @@ class GeneratorProperties(PropertyGroup):
     initHeight: FloatProperty(name="Initial Noise Height", default=0.1, min=0.01, max=10000)
     noiseFreq: FloatProperty(name="Initial Noise Frequency", default=1, min=0.01, max=1000)
     
+    #This enum property needs to be identical to the one in the ANT Landscape code, so I copy and pasted it
+    #
+    noiseType: EnumProperty(
+        name="Noise Type",
+        default='hetero_terrain',
+        description="Noise type",
+        items = [
+            ('multi_fractal', "Multi Fractal", "Blender: Multi Fractal algorithm", 0),
+            ('ridged_multi_fractal', "Ridged MFractal", "Blender: Ridged Multi Fractal", 1),
+            ('hybrid_multi_fractal', "Hybrid MFractal", "Blender: Hybrid Multi Fractal", 2),
+            ('hetero_terrain', "Hetero Terrain", "Blender: Hetero Terrain", 3),
+            ('fractal', "fBm Fractal", "Blender: fBm - Fractional Browninian motion", 4),
+            ('turbulence_vector', "Turbulence", "Blender: Turbulence Vector", 5),
+            ('variable_lacunarity', "Distorted Noise", "Blender: Distorted Noise", 6),
+            ('marble_noise', "Marble", "A.N.T.: Marble Noise", 7),
+            ('shattered_hterrain', "Shattered hTerrain", "A.N.T.: Shattered hTerrain", 8),
+            ('strata_hterrain', "Strata hTerrain", "A.N.T: Strata hTerrain", 9),
+            ('ant_turbulence', "Another Noise", "A.N.T: Turbulence variation", 10),
+            ('vl_noise_turbulence', "vlNoise turbulence", "A.N.T: Real vlNoise turbulence", 11),
+            ('vl_hTerrain', "vlNoise hTerrain", "A.N.T: vlNoise hTerrain", 12),
+            ('distorted_heteroTerrain', "Distorted hTerrain", "A.N.T distorted hTerrain", 13),
+            ('double_multiFractal', "Double MultiFractal", "A.N.T: double multiFractal", 14),
+            ('rocks_noise', "Noise Rocks", "A.N.T: turbulence variation", 15),
+            ('slick_rock', "Slick Rock", "A.N.T: slick rock", 16),
+            ('planet_noise', "Planet Noise", "Planet Noise by: Farsthary", 17),
+            ('blender_texture', "Blender Texture - Texture Nodes", "Blender texture data block", 18)])
+    
 #==============================Operators ==================================================================
 #Operator for initializing the terrain
 class WM_OT_Initiate(Operator):
@@ -36,7 +63,8 @@ class WM_OT_Initiate(Operator):
             height = props.initHeight,
             maximum = props.initHeight,
             minimum = - props.initHeight,
-            noise_size = props.noiseFreq
+            noise_size = props.noiseFreq,
+            noise_type = props.noiseType
             )
         
         return{"FINISHED"}
@@ -72,6 +100,7 @@ class OBJECT_PT_InitialProperties(TectonicToolsMainPanel, Panel):
         layout.prop(props, "subDivs")
         layout.prop(props, "initHeight")
         layout.prop(props, "noiseFreq")
+        layout.prop(props, "noiseType")
 
 class OBJECT_PT_InitializationTools(TectonicToolsMainPanel, Panel):
     bl_parent_id = "OBJECT_PT_generatorPanel"
@@ -90,7 +119,6 @@ class OBJECT_PT_InitializationTools(TectonicToolsMainPanel, Panel):
 classes = (
     GeneratorProperties,
     WM_OT_Initiate,
-    #TectonicToolsMainPanel,
     OBJECT_PT_GeneratorPanel,
     OBJECT_PT_InitialProperties,
     OBJECT_PT_InitializationTools

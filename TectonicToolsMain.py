@@ -66,8 +66,38 @@ class WM_OT_Initiate(Operator):
             noise_size = props.noiseFreq,
             noise_type = props.noiseType
             )
+        return{"FINISHED"}
+
+
+class WM_OT_AddSubFront(Operator):
+    bl_label = "Draw Subduction Front"
+    bl_idname = "wm.add_sub_front"
+    
+    def execute(self, context):
+        scene = context.scene
+        props = scene.properties
+        
+        #We create a new Bezier Curve to represent the subduction front and prepare the curve
+        #such that the user may begin to draw onto our sphere
+        bpy.ops.curve.primitive_bezier_curve_add(enter_editmode=True)
+        bpy.ops.curve.delete(type='VERT')
+        bpy.ops.wm.tool_set_by_id(name="builtin.draw")
+        bpy.data.scenes['Scene'].tool_settings.curve_paint_settings.depth_mode = "SURFACE"
+        return{"FINISHED"}
+
+class WM_OT_RunSubduction(Operator):
+    bl_label = "Run Subduction"
+    bl_idname = "wm.run_subduction"
+    
+    def execute(self, context):
+        scene = context.scene
+        props = scene.properties
+        
+        ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.convert(target='MESH')
         
         return{"FINISHED"}
+        
 
 #===============================Panels ====================================================================
 class TectonicToolsMainPanel:
@@ -112,6 +142,8 @@ class OBJECT_PT_InitializationTools(TectonicToolsMainPanel, Panel):
         
         #For initializing our terrain
         layout.operator("wm.initiate_terrain")
+        layout.operator("wm.add_sub_front")
+        layout.operator("wm.run_subduction")
 
 
 
@@ -121,7 +153,9 @@ classes = (
     WM_OT_Initiate,
     OBJECT_PT_GeneratorPanel,
     OBJECT_PT_InitialProperties,
-    OBJECT_PT_InitializationTools
+    OBJECT_PT_InitializationTools,
+    WM_OT_AddSubFront,
+    WM_OT_RunSubduction
 )
 
 def register():

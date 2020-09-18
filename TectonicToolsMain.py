@@ -1,4 +1,3 @@
-
 import os
 
 import bpy
@@ -15,8 +14,11 @@ class GeneratorProperties(PropertyGroup):
     initHeight: FloatProperty(name="Initial Noise Height", default=0.1, min=0.01, max=10000)
     noiseFreq: FloatProperty(name="Initial Noise Frequency", default=1, min=0.01, max=1000)
     
+    #Identifiers so that we can retrieve relevant data throughout code
+    planetID: StringProperty(name="Planet Identifier")
+    subFrontsID: StringProperty(name="Subduction Front Identifier")
+    
     #This enum property needs to be identical to the one in the ANT Landscape code, so I copy and pasted it
-    #
     noiseType: EnumProperty(
         name="Noise Type",
         default='hetero_terrain',
@@ -66,6 +68,12 @@ class WM_OT_Initiate(Operator):
             noise_size = props.noiseFreq,
             noise_type = props.noiseType
             )
+        
+        #Store the name of the newly created planet so that we can reference it later
+        planet = bpy.context.active_object
+        props.planetID = planet.name
+        
+        
         return{"FINISHED"}
 
 
@@ -93,8 +101,14 @@ class WM_OT_RunSubduction(Operator):
         scene = context.scene
         props = scene.properties
         
-        ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.mode_set(mode='OBJECT')
         bpy.ops.object.convert(target='MESH')
+        bpy.ops.object.mode_set(mode='EDIT')
+        
+        subFronts = bpy.context.active_object
+        props.subFrontsID = subFronts.name
+        
+        print("Planet Name = {}, Sub Fronts Name = {}".format(props.planetID, props.subFrontsID))
         
         return{"FINISHED"}
         

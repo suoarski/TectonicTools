@@ -3,12 +3,27 @@ import os
 import bpy
 import bmesh
 import mathutils as M
-from mathutils.bvhtree import BVHTree
-from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty, FloatVectorProperty, EnumProperty, PointerProperty)
-from bpy.types import (Panel, Menu, Operator, PropertyGroup)
+
+from bpy.props import (
+    StringProperty, 
+    BoolProperty, 
+    IntProperty, 
+    FloatProperty, 
+    FloatVectorProperty, 
+    EnumProperty, 
+    PointerProperty
+    )
+from bpy.types import (
+    Panel, 
+    Menu, 
+    Operator, 
+    PropertyGroup
+    )
 
 #==============================Properties ================================================================
 class GeneratorProperties(PropertyGroup):
+
+	#Properties that are used during the planet initialization
     radius: FloatProperty(name="Sphere Radius", default=6, min=0.1, max=10000)
     subDivs: IntProperty(name="Mesh Subdivisions", default=256, min=1, max=100000)
     initHeight: FloatProperty(name="Initial Noise Height", default=0.1, min=0.01, max=10000)
@@ -17,6 +32,10 @@ class GeneratorProperties(PropertyGroup):
     #Identifiers so that we can retrieve relevant data throughout code
     planetID: StringProperty(name="Planet Identifier")
     subFrontsID: StringProperty(name="Subduction Front Identifier")
+
+    deltaTime: FloatProperty(name="Time Step Size (dt)", default=0.1, min=0.001, max=10000)
+    plateSpeed: FloatProperty(name="Plate Speed", default=1, min=0.01, max=1000)
+
     
     #This enum property needs to be identical to the one in the ANT Landscape code, so I copy and pasted it
     noiseType: EnumProperty(
@@ -54,6 +73,8 @@ class WM_OT_Initiate(Operator):
     def execute(self, context):
         scene = context.scene
         props = scene.properties
+
+        initializeProfileCurves()
         
         #We use the ANT Landscape add on to initiate our landscape and set properties as required
         bpy.ops.mesh.landscape_add(
@@ -101,14 +122,98 @@ class WM_OT_RunSubduction(Operator):
         scene = context.scene
         props = scene.properties
         
-        bpy.ops.object.mode_set(mode='OBJECT')
-        bpy.ops.object.convert(target='MESH')
-        bpy.ops.object.mode_set(mode='EDIT')
         
+        
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        #We check if the SubFronts collection already exists, and create one otherwise
+        #Collections are a directory like structure for objects within the scene
+        defaultCollection = bpy.data.collections["Collection"]
+        if "SubFronts" not in bpy.data.collections:
+            bpy.ops.collection.create(name="SubFronts")
+            subFrontCollection = bpy.data.collections["SubFronts"]
+            bpy.context.scene.collection.children.link(subFrontCollection)
+        else:
+            subFrontCollection = bpy.data.collections["SubFronts"]
+        
+
+
+        fronts = bpy.context.selected_objects
+        for front in fronts:
+            if front.type == 'CURVE':
+                defaultCollection.objects.unlink(front)
+                bpy.ops.object.mode_set(mode='OBJECT')
+                bpy.ops.object.convert(target='MESH')
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.mesh.separate(type='LOOSE')
+            else:
+                front.select_set(False)
+                print("Wrong Object Selected")
+
+        '''
         subFronts = bpy.context.active_object
         props.subFrontsID = subFronts.name
         
-        print("Planet Name = {}, Sub Fronts Name = {}".format(props.planetID, props.subFrontsID))
+        #Create Bmesh objects to allow for mesh manipulations within python code
+        planet = bpy.data.objects.get(props.planetID)
+        subFrontsBM = bmesh.from_edit_mesh(subFronts.data)
+        planetBM = bmesh.new()
+        planetBM.from_mesh(planet.data)
+        '''
+
+
+
+
+        '''
+        #bpy.ops.outliner.id_operation(type='UNLINK')
+        bpy.ops.object.mode_set(mode='EDIT')
+
+        #Convert subfronts from type bezier curve to a mesh type object
+        bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.convert(target='MESH')
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.separate(type='LOOSE')
+        
+
+
+        #bpy.ops.outliner.collection_new(nested=False)
+        print(fronts)
+        for ob in subFrontCollection.objects:
+            print(ob)
+
+        #Store the name of the newly created mesh object representing subduction fronts
+        
+        
+
+        
+        print(subFrontsBM.loops)
+
+        loops = (l for f in subFrontsBM.faces for l in f.loops)
+
+        for l in loops:
+            print(l)
+        '''
+        #bpy.ops.mesh.edge_face_add()
+        #bpy.ops.mesh.separate(type='LOOSE')
+
+
+
+        '''
+        #Create a K-Dimensional Tree object for faster spacial searches
+        subFrontsKD = M.kdtree.KDTree(len(subFrontsBM.verts))
+        for i, v in enumerate(subFrontsBM.verts):
+            subFrontsKD.insert(v.co, i)
+        subFrontsKD.balance()
+        
+        
+
+        
+        for v in planetBM.verts:
+            co, index, dist = subFrontsKD.find(v.co)
+            
+            print("VertCo = {}\nClosestSubFront = {}\nDistance = {}".format(v.co, co, dist))
+        '''
+        #print("Planet Name = {}, Sub Fronts Name = {}".format(props.planetID, props.subFrontsID))
         
         return{"FINISHED"}
         
@@ -132,6 +237,19 @@ class OBJECT_PT_GeneratorPanel(TectonicToolsMainPanel, Panel):
         scene = context.scene
         props = scene.properties
 
+class OBJECT_PT_Buttons(TectonicToolsMainPanel, Panel):
+    bl_parent_id = "OBJECT_PT_generatorPanel"
+    bl_label = "Buttons"
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        props = scene.properties
+        
+        #For initializing our terrain
+        layout.operator("wm.initiate_terrain")
+        layout.operator("wm.add_sub_front")
+        layout.operator("wm.run_subduction")
+
 class OBJECT_PT_InitialProperties(TectonicToolsMainPanel, Panel):
     bl_parent_id = "OBJECT_PT_generatorPanel"
     bl_label = "Global Properties"
@@ -146,19 +264,41 @@ class OBJECT_PT_InitialProperties(TectonicToolsMainPanel, Panel):
         layout.prop(props, "noiseFreq")
         layout.prop(props, "noiseType")
 
-class OBJECT_PT_InitializationTools(TectonicToolsMainPanel, Panel):
+class OBJECT_PT_SubductionProperties(TectonicToolsMainPanel, Panel):
     bl_parent_id = "OBJECT_PT_generatorPanel"
-    bl_label = "Buttons"
+    bl_label = "Subduction Properties"
     def draw(self, context):
         layout = self.layout
         scene = context.scene
         props = scene.properties
-        
-        #For initializing our terrain
-        layout.operator("wm.initiate_terrain")
-        layout.operator("wm.add_sub_front")
-        layout.operator("wm.run_subduction")
 
+        layout.prop(props, "deltaTime")
+        layout.prop(props, "plateSpeed")
+
+        #Node groups are used to store profile curves, 
+        #and profile curves are used to allow the user to custimize functions within the code (Eg. Distance Transfer) 
+        if 'ProfileCurves' not in bpy.data.node_groups:
+        	bpy.data.node_groups.new('ProfileCurves', 'ShaderNodeTree')
+
+        curveTree = bpy.data.node_groups['ProfileCurves'].nodes
+        layout.label(text="Subduction Uplift Distance Transfer")
+        if "Distance Transfer" in curveTree.keys():
+        	layout.template_curve_mapping(curveTree["Distance Transfer"], "mapping")
+
+
+def initializeProfileCurves():
+    if 'ProfileCurves' not in bpy.data.node_groups:
+        bpy.data.node_groups.new('ProfileCurves', 'ShaderNodeTree')
+    
+    nods = bpy.data.node_groups['ProfileCurves'].nodes
+    if "Distance Transfer" not in nods.keys():
+        distCurves = nods.new('ShaderNodeRGBCurve')
+        distCurves.name = "Distance Transfer"
+        pnts = distCurves.mapping.curves[3].points
+        pnts[0].location = [0.0, 0.8]
+        pnts[1].location = [1.0, 0.0]
+        pnts.new(0.2, 1.0)
+        pnts.new(0.75, 0.15)
 
 
 #=============================Register Classes to Blender ================================================
@@ -166,8 +306,9 @@ classes = (
     GeneratorProperties,
     WM_OT_Initiate,
     OBJECT_PT_GeneratorPanel,
+    OBJECT_PT_Buttons,
     OBJECT_PT_InitialProperties,
-    OBJECT_PT_InitializationTools,
+    OBJECT_PT_SubductionProperties,
     WM_OT_AddSubFront,
     WM_OT_RunSubduction
 )

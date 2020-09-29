@@ -3,6 +3,7 @@ import os
 import bpy
 import bmesh
 import mathutils as M
+import math
 
 from bpy.props import (
     StringProperty, 
@@ -34,7 +35,7 @@ class GeneratorProperties(PropertyGroup):
     subFrontsID: StringProperty(name="Subduction Front Identifier")
 
     deltaTime: FloatProperty(name="Time Step Size (dt)", default=0.1, min=0.001, max=10000)
-    plateSpeed: FloatProperty(name="Plate Speed", default=1, min=0.01, max=1000)
+    plateSpeed: FloatProperty(name="Plate Speed", default=0.1, min=0.0001, max=1000)
 
     
     #This enum property needs to be identical to the one in the ANT Landscape code, so I copy and pasted it
@@ -122,12 +123,9 @@ class WM_OT_RunSubduction(Operator):
         scene = context.scene
         props = scene.properties
         
-        
-        
-        bpy.ops.object.mode_set(mode='OBJECT')
-        
         #We check if the SubFronts collection already exists, and create one otherwise
         #Collections are a directory like structure for objects within the scene
+        bpy.ops.object.mode_set(mode='OBJECT')
         defaultCollection = bpy.data.collections["Collection"]
         if "SubFronts" not in bpy.data.collections:
             bpy.ops.collection.create(name="SubFronts")
@@ -137,19 +135,100 @@ class WM_OT_RunSubduction(Operator):
             subFrontCollection = bpy.data.collections["SubFronts"]
         
 
-
-        fronts = bpy.context.selected_objects
-        for front in fronts:
-            if front.type == 'CURVE':
-                defaultCollection.objects.unlink(front)
+        #Assuming that the subduction front object is selected and is still of type CURVE,
+        #We convert it to a MESH and seperate the MESH by loose parts
+        selectedObjects = bpy.context.selected_objects
+        for obj in selectedObjects:
+            if obj.type == 'CURVE':
+                if (obj.name in defaultCollection.objects.keys()):
+                    defaultCollection.objects.unlink(obj)
                 bpy.ops.object.mode_set(mode='OBJECT')
                 bpy.ops.object.convert(target='MESH')
                 bpy.ops.object.mode_set(mode='EDIT')
                 bpy.ops.mesh.separate(type='LOOSE')
-            else:
-                front.select_set(False)
-                print("Wrong Object Selected")
+        
+        for obj in selectedObjects:
+            obj.select_set(False)
 
+        #Create a list of bmesh objects for each subduction front
+        #Bmesh allows for mesh manipulations within python code
+        frontsBM = []
+        subFronts = subFrontCollection.objects
+        for front in subFronts:
+            newBM = bmesh.new()
+            newBM.from_mesh(front.data)
+            frontsBM.append(newBM)
+
+        #For each subduction front, we create a quaternion to represent the plate velocity of nearby vertices
+        quaternions = []
+        for front in frontsBM:
+            front.verts.ensure_lookup_table()
+            start = front.verts[0].co
+            end = front.verts[-1].co
+            axes = end - start
+            quaternions.append(M.Quaternion(axes, math.radians(props.plateSpeed)))
+        
+        #For each subfuction front, we create a kd-tree for faster spacial searches
+        subFrontsKDTrees = []
+        for front in frontsBM:
+            kd = M.kdtree.KDTree(len(front.verts))
+            for i, v in enumerate(front.verts):
+                kd.insert(v.co, i)
+            kd.balance()
+            subFrontsKDTrees.append(kd)
+
+        #Create a bmesh object for the planet itself
+        planet = bpy.data.objects.get(props.planetID)
+        planetBM = bmesh.new()
+        planetBM.from_mesh(planet.data)
+
+        #We move each vertex of the planetBM towards the closest subduction front
+        for v in planetBM.verts:
+
+            #List of results from the kd.find() function for each front
+            kdFinds = [list(kd.find(v.co)) for kd in subFrontsKDTrees]
+
+            #We find the front index corresponding to the closest subduction front
+            distants = [fnd[2] for fnd in kdFinds]
+            dist, idx = min((dist, idx) for (idx, dist) in enumerate(distants))
+
+            if ((quaternions[idx] @ v.co - kdFinds[idx][0]).length < dist):
+                v.co = quaternions[idx] @ v.co
+            else:
+                newQuat = quaternions[idx].inverted()
+                print('Initial: {}\nNormal: {}\n Inverted: {}\n\n'.format(v.co, quaternions[idx] @ v.co, newQuat @ v.co))
+                v.co = newQuat @ v.co
+
+
+            print('{}, {}'.format(distants, idx))
+
+        planetBM.to_mesh(planet.data)
+        planetBM.free()
+        '''
+        for v in planetBM.verts:
+            co, index, dist = subFrontsKD.find(v.co)
+            
+            print("VertCo = {}\nClosestSubFront = {}\nDistance = {}".format(v.co, co, dist))
+        '''
+
+        '''
+        #Create a K-Dimensional Tree object for faster spacial searches
+        subFrontsKD = M.kdtree.KDTree(len(subFrontsBM.verts))
+        for i, v in enumerate(subFrontsBM.verts):
+            subFrontsKD.insert(v.co, i)
+        subFrontsKD.balance()
+        '''
+
+        '''
+        for v in frontsBM[0].verts:
+            print('{}, {}, {}'.format(v.co.x, v.co.y, v.co.z))
+
+        for f in frontsBM:
+            print(f)
+
+        for front in subFronts:
+            print(front.data)
+        '''
         '''
         subFronts = bpy.context.active_object
         props.subFrontsID = subFronts.name
@@ -198,21 +277,7 @@ class WM_OT_RunSubduction(Operator):
 
 
 
-        '''
-        #Create a K-Dimensional Tree object for faster spacial searches
-        subFrontsKD = M.kdtree.KDTree(len(subFrontsBM.verts))
-        for i, v in enumerate(subFrontsBM.verts):
-            subFrontsKD.insert(v.co, i)
-        subFrontsKD.balance()
         
-        
-
-        
-        for v in planetBM.verts:
-            co, index, dist = subFrontsKD.find(v.co)
-            
-            print("VertCo = {}\nClosestSubFront = {}\nDistance = {}".format(v.co, co, dist))
-        '''
         #print("Planet Name = {}, Sub Fronts Name = {}".format(props.planetID, props.subFrontsID))
         
         return{"FINISHED"}
@@ -252,7 +317,7 @@ class OBJECT_PT_Buttons(TectonicToolsMainPanel, Panel):
 
 class OBJECT_PT_InitialProperties(TectonicToolsMainPanel, Panel):
     bl_parent_id = "OBJECT_PT_generatorPanel"
-    bl_label = "Global Properties"
+    bl_label = "Initial World Properties"
     def draw(self, context):
         layout = self.layout
         scene = context.scene

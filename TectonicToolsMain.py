@@ -3,7 +3,8 @@ import os
 import bpy
 import bmesh
 import mathutils as M
-import math
+from math import (acos, atan2, cos, sin, sqrt, radians)
+import numpy as np
 
 from bpy.props import (
     StringProperty, 
@@ -36,6 +37,10 @@ class GeneratorProperties(PropertyGroup):
 
     deltaTime: FloatProperty(name="Time Step Size (dt)", default=0.1, min=0.001, max=10000)
     plateSpeed: FloatProperty(name="Plate Speed", default=0.1, min=0.0001, max=1000)
+    plateauHeightLim: FloatProperty(name='Plateau Height Limit', default=1, min=0.0001, max=10000)
+    influenceRangeMax: FloatProperty(name="Max Range of Influence", default=2, min=0.001, max=10000)
+    influenceRangeMin: FloatProperty(name="Min Range of Influence", default=0.5, min=0.001, max=10000)
+    baseUplift: FloatProperty(name='Base Subduction Uplift', default=0.1, min=0.0001, max=10000)
 
     
     #This enum property needs to be identical to the one in the ANT Landscape code, so I copy and pasted it
@@ -115,6 +120,70 @@ class WM_OT_AddSubFront(Operator):
         bpy.data.scenes['Scene'].tool_settings.curve_paint_settings.depth_mode = "SURFACE"
         return{"FINISHED"}
 
+#Collections are a directory like structure for objects within the scene
+#We check if the SubFronts collection already exists, and create one otherwise
+def getCollections():
+    bpy.ops.object.mode_set(mode='OBJECT')
+    defaultCollection = bpy.data.collections["Collection"]
+    if "SubFronts" not in bpy.data.collections:
+        bpy.ops.collection.create(name="SubFronts")
+        subFrontCollection = bpy.data.collections["SubFronts"]
+        bpy.context.scene.collection.children.link(subFrontCollection)
+    else:
+        subFrontCollection = bpy.data.collections["SubFronts"]
+    return (defaultCollection, subFrontCollection)
+
+#Assuming that the subduction front object is selected and is still of type CURVE,
+#We convert it to a MESH and seperate the MESH by loose parts
+def splitBezierCurveToMesh(defaultCollection):
+    selectedObjects = bpy.context.selected_objects
+    for obj in selectedObjects:
+        if obj.type == 'CURVE':
+            if (obj.name in defaultCollection.objects.keys()):
+                defaultCollection.objects.unlink(obj)
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.convert(target='MESH')
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.separate(type='LOOSE')
+    for obj in selectedObjects:
+        obj.select_set(False)
+
+#Create a list of bmesh objects for each subduction front
+#Bmesh allows for mesh manipulations within python code
+def getSubfrontBMeshes(subFrontCollection):
+    frontsBM = []
+    subFronts = subFrontCollection.objects
+    for front in subFronts:
+        newBM = bmesh.new()
+        newBM.from_mesh(front.data)
+        frontsBM.append(newBM)
+    return frontsBM
+
+#For each subduction front, we create a quaternion to represent the plate velocity of nearby vertices
+def getQuaternions(frontsBM, props):
+    quaternions = []
+    for front in frontsBM:
+        front.verts.ensure_lookup_table()
+        start = front.verts[0].co
+        end = front.verts[-1].co
+        axes = end - start
+        quaternions.append(M.Quaternion(axes, radians(props.plateSpeed)))
+    return quaternions
+
+#For each subfuction front, we create a kd-tree for faster spacial searches
+def getKDTrees(frontsBM):
+    subFrontsKDTrees = []
+    for front in frontsBM:
+        kd = M.kdtree.KDTree(len(front.verts))
+        for i, v in enumerate(front.verts):
+            kd.insert(v.co, i)
+        kd.balance()
+        subFrontsKDTrees.append(kd)
+    return subFrontsKDTrees
+
+
+
+
 class WM_OT_RunSubduction(Operator):
     bl_label = "Run Subduction"
     bl_idname = "wm.run_subduction"
@@ -123,64 +192,27 @@ class WM_OT_RunSubduction(Operator):
         scene = context.scene
         props = scene.properties
         
-        #We check if the SubFronts collection already exists, and create one otherwise
-        #Collections are a directory like structure for objects within the scene
-        bpy.ops.object.mode_set(mode='OBJECT')
-        defaultCollection = bpy.data.collections["Collection"]
-        if "SubFronts" not in bpy.data.collections:
-            bpy.ops.collection.create(name="SubFronts")
-            subFrontCollection = bpy.data.collections["SubFronts"]
-            bpy.context.scene.collection.children.link(subFrontCollection)
-        else:
-            subFrontCollection = bpy.data.collections["SubFronts"]
+        #Functions for setting up blender collections
+        defaultCollection, subFrontCollection = getCollections()
+        splitBezierCurveToMesh(defaultCollection)
+
+        #Functions for getting and setting up objects
+        frontsBM = getSubfrontBMeshes(subFrontCollection)
+        quaternions = getQuaternions(frontsBM, props)
+        subFrontsKDTrees = getKDTrees(frontsBM)
         
-
-        #Assuming that the subduction front object is selected and is still of type CURVE,
-        #We convert it to a MESH and seperate the MESH by loose parts
-        selectedObjects = bpy.context.selected_objects
-        for obj in selectedObjects:
-            if obj.type == 'CURVE':
-                if (obj.name in defaultCollection.objects.keys()):
-                    defaultCollection.objects.unlink(obj)
-                bpy.ops.object.mode_set(mode='OBJECT')
-                bpy.ops.object.convert(target='MESH')
-                bpy.ops.object.mode_set(mode='EDIT')
-                bpy.ops.mesh.separate(type='LOOSE')
-        
-        for obj in selectedObjects:
-            obj.select_set(False)
-
-        #Create a list of bmesh objects for each subduction front
-        #Bmesh allows for mesh manipulations within python code
-        frontsBM = []
-        subFronts = subFrontCollection.objects
-        for front in subFronts:
-            newBM = bmesh.new()
-            newBM.from_mesh(front.data)
-            frontsBM.append(newBM)
-
-        #For each subduction front, we create a quaternion to represent the plate velocity of nearby vertices
-        quaternions = []
-        for front in frontsBM:
-            front.verts.ensure_lookup_table()
-            start = front.verts[0].co
-            end = front.verts[-1].co
-            axes = end - start
-            quaternions.append(M.Quaternion(axes, math.radians(props.plateSpeed)))
-        
-        #For each subfuction front, we create a kd-tree for faster spacial searches
-        subFrontsKDTrees = []
-        for front in frontsBM:
-            kd = M.kdtree.KDTree(len(front.verts))
-            for i, v in enumerate(front.verts):
-                kd.insert(v.co, i)
-            kd.balance()
-            subFrontsKDTrees.append(kd)
-
         #Create a bmesh object for the planet itself
         planet = bpy.data.objects.get(props.planetID)
         planetBM = bmesh.new()
         planetBM.from_mesh(planet.data)
+
+        #Front ID to be used for keeping track which subduction front each vertex belongs to
+        frontId = planetBM.verts.layers.int.new('id')
+        distances = planetBM.verts.layers.float.new('dist')
+
+
+        plateVerts = [[] for i in range(len(frontsBM))]
+        plateFaces = [[] for i in range(len(frontsBM))]
 
         #We move each vertex of the planetBM towards the closest subduction front
         for v in planetBM.verts:
@@ -191,97 +223,103 @@ class WM_OT_RunSubduction(Operator):
             #We find the front index corresponding to the closest subduction front
             distants = [fnd[2] for fnd in kdFinds]
             dist, idx = min((dist, idx) for (idx, dist) in enumerate(distants))
+            #print(dist)
 
+            #The front ID is used to label which front a particular vertex belongs to
+            v[frontId] = idx
+            v[distances] = dist
+            plateVerts[idx].append(v)
+
+            '''
+            #Adjust the direction of plate movement so that vertices are 
+            #always travellling towards the closest front
             if ((quaternions[idx] @ v.co - kdFinds[idx][0]).length < dist):
                 v.co = quaternions[idx] @ v.co
             else:
                 newQuat = quaternions[idx].inverted()
-                print('Initial: {}\nNormal: {}\n Inverted: {}\n\n'.format(v.co, quaternions[idx] @ v.co, newQuat @ v.co))
                 v.co = newQuat @ v.co
+            
+        for f in planetBM.faces:
+            plateFaces[f.verts[0]]
+        '''
+
+        influenceRange = getSubductionRangeOfInfluence(planetBM, frontId, props, frontsBM)
+
+        baseUp = props.baseUplift
+
+        for v in planetBM.verts:
+            dist = v[distances]
+            index = v[frontId]
+            infRange = influenceRange[index]
+            distTrans = getDistanceTransfer(dist, infRange)
+            #print('Range: {}\nDistance: {}\nTransfer: {}\n\n'.format(infRange, dist, distTrans))
+            uplift = baseUp * distTrans
+            v = moveAlongRadialDirection(v, uplift)
 
 
-            print('{}, {}'.format(distants, idx))
 
+
+        
         planetBM.to_mesh(planet.data)
         planetBM.free()
-        '''
-        for v in planetBM.verts:
-            co, index, dist = subFrontsKD.find(v.co)
-            
-            print("VertCo = {}\nClosestSubFront = {}\nDistance = {}".format(v.co, co, dist))
-        '''
-
-        '''
-        #Create a K-Dimensional Tree object for faster spacial searches
-        subFrontsKD = M.kdtree.KDTree(len(subFrontsBM.verts))
-        for i, v in enumerate(subFrontsBM.verts):
-            subFrontsKD.insert(v.co, i)
-        subFrontsKD.balance()
-        '''
-
-        '''
-        for v in frontsBM[0].verts:
-            print('{}, {}, {}'.format(v.co.x, v.co.y, v.co.z))
-
-        for f in frontsBM:
-            print(f)
-
-        for front in subFronts:
-            print(front.data)
-        '''
-        '''
-        subFronts = bpy.context.active_object
-        props.subFrontsID = subFronts.name
-        
-        #Create Bmesh objects to allow for mesh manipulations within python code
-        planet = bpy.data.objects.get(props.planetID)
-        subFrontsBM = bmesh.from_edit_mesh(subFronts.data)
-        planetBM = bmesh.new()
-        planetBM.from_mesh(planet.data)
-        '''
-
-
-
-
-        '''
-        #bpy.ops.outliner.id_operation(type='UNLINK')
-        bpy.ops.object.mode_set(mode='EDIT')
-
-        #Convert subfronts from type bezier curve to a mesh type object
-        bpy.ops.object.mode_set(mode='OBJECT')
-        bpy.ops.object.convert(target='MESH')
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.separate(type='LOOSE')
-        
-
-
-        #bpy.ops.outliner.collection_new(nested=False)
-        print(fronts)
-        for ob in subFrontCollection.objects:
-            print(ob)
-
-        #Store the name of the newly created mesh object representing subduction fronts
-        
-        
-
-        
-        print(subFrontsBM.loops)
-
-        loops = (l for f in subFrontsBM.faces for l in f.loops)
-
-        for l in loops:
-            print(l)
-        '''
-        #bpy.ops.mesh.edge_face_add()
-        #bpy.ops.mesh.separate(type='LOOSE')
-
-
-
-        
-        #print("Planet Name = {}, Sub Fronts Name = {}".format(props.planetID, props.subFrontsID))
         
         return{"FINISHED"}
-        
+
+def moveAlongRadialDirection(v, dr):
+    r, theta, phi = getPolarCoords(v.co.x, v.co.y, v.co.z)
+    v.co.x += sin(theta) * cos(phi) * dr
+    v.co.y += sin(theta) * sin(phi) * dr
+    v.co.z += cos(theta) * dr
+    return v
+
+#Coordinate transformation function from cartesian to polar
+def getPolarCoords(X, Y, Z):
+    R = np.sqrt(X**2 + Y**2 + Z**2)
+    Theta = np.arccos(Z / R)
+    Phi = np.arctan2(Y, X)    
+    return (R, Theta, Phi)
+
+
+#Sample a point from the distance transfer curve editor      
+def getDistanceTransfer(dist, infRange):
+    distTransCurve = bpy.data.node_groups['ProfileCurves'].nodes['Distance Transfer'].mapping
+    curve = distTransCurve.curves[3]
+
+    samplePoint = dist / infRange
+    if (samplePoint > 1):
+        samplePoint = 1
+
+    #distTransCurve.initialize()
+    return distTransCurve.evaluate(curve, samplePoint)
+
+
+
+#Depending on how high a mountain range is, the range of subduction influence needs to be calculated accordingly
+#The larger a moutain range, the larger the influence
+#We use the volume of the mountain range that is above the initial world radius to calculate the range of influence
+def getSubductionRangeOfInfluence(planetBM, frontId, props, frontsBM):
+    
+    #Get relevant properties
+    initH = props.radius
+    maxRange = props.influenceRangeMax
+    minRange = props.influenceRangeMin
+    listLength = len(frontsBM)
+
+    volumeAboveInitialHeight = [0 for i in range(listLength)]
+    totalArea = [0 for i in range(listLength)]
+    for f in planetBM.faces:
+        index = f.verts[0][frontId]
+        area = f.calc_area()
+        heightDiff = sum([(v.co.x**2 + v.co.y**2 + v.co.z**2)**0.5 - initH for v in f.verts]) / len(f.verts)
+        volumeAboveInitialHeight[index] += area * heightDiff
+        totalArea[index] += area
+
+    maxHeight = props.plateauHeightLim
+    maxVolume = [area * maxHeight for area in totalArea]
+    proportion = [(volumeAboveInitialHeight[i] / maxVolume[i]) for i in range(listLength)]
+    influenceRange = [minRange + (maxRange - minRange) * proportion[i] for i in range(listLength)]
+    return influenceRange
+
 
 #===============================Panels ====================================================================
 class TectonicToolsMainPanel:
@@ -339,16 +377,26 @@ class OBJECT_PT_SubductionProperties(TectonicToolsMainPanel, Panel):
 
         layout.prop(props, "deltaTime")
         layout.prop(props, "plateSpeed")
+        layout.prop(props, "plateauHeightLim")
+        layout.prop(props, "influenceRangeMax")
+        layout.prop(props, "influenceRangeMin")
+        layout.prop(props, "baseUplift")
 
         #Node groups are used to store profile curves, 
         #and profile curves are used to allow the user to custimize functions within the code (Eg. Distance Transfer) 
         if 'ProfileCurves' not in bpy.data.node_groups:
         	bpy.data.node_groups.new('ProfileCurves', 'ShaderNodeTree')
-
         curveTree = bpy.data.node_groups['ProfileCurves'].nodes
+        
+        #Curves for custimizing the distance transfer function
         layout.label(text="Subduction Uplift Distance Transfer")
         if "Distance Transfer" in curveTree.keys():
         	layout.template_curve_mapping(curveTree["Distance Transfer"], "mapping")
+
+        #Curves for custimizing the height transfer function
+        layout.label(text="Height Transfer")
+        if "Height Transfer" in curveTree.keys():
+            layout.template_curve_mapping(curveTree["Height Transfer"], "mapping")
 
 
 def initializeProfileCurves():
@@ -364,6 +412,16 @@ def initializeProfileCurves():
         pnts[1].location = [1.0, 0.0]
         pnts.new(0.2, 1.0)
         pnts.new(0.75, 0.15)
+
+    if "Height Transfer" not in nods.keys():
+        distCurves = nods.new('ShaderNodeRGBCurve')
+        distCurves.name = "Height Transfer"
+        pnts = distCurves.mapping.curves[3].points
+        pnts[0].location = [0.0, 0.5]
+        pnts[1].location = [0.25, 0.6]
+        pnts.new(0.5, 1.0)
+        pnts.new(0.75, 0.1)
+        pnts.new(1.0, 0.0)
 
 
 #=============================Register Classes to Blender ================================================

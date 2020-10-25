@@ -1,5 +1,3 @@
-import os
-
 import bpy
 import bmesh
 import mathutils as M
@@ -22,27 +20,29 @@ from bpy.types import (
     PropertyGroup
     )
 
-#==============================Properties ================================================================
+
 class GeneratorProperties(PropertyGroup):
 
-	#Properties that are used during the planet initialization
-    radius: FloatProperty(name="Sphere Radius", default=6, min=0.1, max=10000)
-    subDivs: IntProperty(name="Mesh Subdivisions", default=512, min=1, max=100000)
+    #Properties for the initial terrain. These will be passed onto ANT Landscape
+    subDivs: IntProperty(name="Mesh Subdivisions", default=1024, min=1, max=100000)
+    meshSize: FloatProperty(name="Mesh Size", default=20, min=0.1, max=100000)
     initHeight: FloatProperty(name="Initial Noise Height", default=0.2, min=0.01, max=10000)
     noiseFreq: FloatProperty(name="Initial Noise Frequency", default=1, min=0.01, max=1000)
-    
+
     #Identifiers so that we can retrieve relevant data throughout code
-    planetID: StringProperty(name="Planet Identifier")
-    subFrontsID: StringProperty(name="Subduction Front Identifier")
+    terrainID: StringProperty(name="Terrain Identifier")
 
-    deltaTime: FloatProperty(name="Time Step Size (dt)", default=0.1, min=0.001, max=10000)
-    plateSpeed: FloatProperty(name="Plate Speed", default=1.0, min=0.0001, max=1000)
-    plateauHeightLim: FloatProperty(name='Plateau Height Limit', default=1, min=0.0001, max=10000)
-    influenceRangeMax: FloatProperty(name="Max Range of Influence", default=10, min=0.001, max=10000)
-    influenceRangeMin: FloatProperty(name="Min Range of Influence", default=1, min=0.001, max=10000)
-    baseUplift: FloatProperty(name='Base Subduction Uplift', default=0.5, min=0.0001, max=10000)
+    #Properties to be used in subduction uplift
+    time: FloatProperty(name="Time (Million Years)", default=0, min=0, max=10000000)
+    deltaTime: FloatProperty(name="Time Steps (dt)", default=0.05, min=0.0001, max=10000)
+    iterations: IntProperty(name="Iterations Per Click", default=5, min=1, max=100000)
 
-    
+    baseUplift: FloatProperty(name="Base Subduction Uplift", default=10.0, min=0.0001, max=100000)
+    plateSpeed: FloatProperty(name="Plate Speed", default=0.2, min=0.0001, max=1000)
+    m1: FloatProperty(name="Slope Going Up From Front", default=1, min=0.01, max=1000)
+    m2: FloatProperty(name="Slope Going Down", default=0.2, min=0.01, max=1000)
+    plateauHeight: FloatProperty(name="Plateau Height", default=1.4, min=0.01, max=100000)
+
     #This enum property needs to be identical to the one in the ANT Landscape code, so I copy and pasted it
     noiseType: EnumProperty(
         name="Noise Type",
@@ -68,7 +68,8 @@ class GeneratorProperties(PropertyGroup):
             ('slick_rock', "Slick Rock", "A.N.T: slick rock", 16),
             ('planet_noise', "Planet Noise", "Planet Noise by: Farsthary", 17),
             ('blender_texture', "Blender Texture - Texture Nodes", "Blender texture data block", 18)])
-    
+
+
 #==============================Operators ==================================================================
 #Operator for initializing the terrain
 class WM_OT_Initiate(Operator):
@@ -80,26 +81,22 @@ class WM_OT_Initiate(Operator):
         scene = context.scene
         props = scene.properties
 
-        initializeProfileCurves()
-        
-        #We use the ANT Landscape add on to initiate our landscape and set properties as required
         bpy.ops.mesh.landscape_add(
             refresh = True, 
-            sphere_mesh = True,
             subdivision_x = props.subDivs,
             subdivision_y = props.subDivs,
-            mesh_size = 2 * props.radius,
+            mesh_size_x = props.meshSize,
+            mesh_size_y = props.meshSize,
             height = props.initHeight,
             maximum = props.initHeight,
             minimum = - props.initHeight,
             noise_size = props.noiseFreq,
             noise_type = props.noiseType
             )
-        
-        #Store the name of the newly created planet so that we can reference it later
-        planet = bpy.context.active_object
-        props.planetID = planet.name
-        return{"FINISHED"}
+
+        terrain = bpy.context.active_object
+        props.terrainID = terrain.name
+        return {"FINISHED"}
 
 
 class WM_OT_AddSubFront(Operator):
@@ -118,7 +115,6 @@ class WM_OT_AddSubFront(Operator):
         bpy.data.scenes['Scene'].tool_settings.curve_paint_settings.depth_mode = "SURFACE"
         return{"FINISHED"}
 
-
 class WM_OT_RunSubduction(Operator):
     bl_label = "Run Subduction"
     bl_idname = "wm.run_subduction"
@@ -126,7 +122,6 @@ class WM_OT_RunSubduction(Operator):
     def execute(self, context):
         scene = context.scene
         props = scene.properties
-        baseUp = props.baseUplift
 
         #If not already done so, we begin by organizing our bezier curve collections
         #Collections is blender's directory system for objects in the scene,
@@ -134,45 +129,88 @@ class WM_OT_RunSubduction(Operator):
         defaultCollection, subFrontCollection = getCollections()
         splitBezierCurveToMesh(defaultCollection)
         frontsBM = getSubfrontBMeshes(subFrontCollection)
+
+        #Create a bmesh object for the terrain
+        terrain = bpy.data.objects.get(props.terrainID)
+        terrainBM = bmesh.new()
+        terrainBM.from_mesh(terrain.data)
+
+        #Create a numpy array of vertex coordinates
+        #I will try to do all my major calculations using numpy, 
+        #as it is significantly faster than using loops, and can be easily modified to use GPU acceleration
+
+        XYZ = np.array([[i for i in v.co] for v in terrainBM.verts])
+
+        #We use custom vertex layers to save data in blender and avoid having to recalculate these values
+        #each time this operator is called. This function returns data as np arrays
+        frontID, dists, speedTransfer = getCustomVertexLayers(props, terrainBM, frontsBM)
+
+        for i in range(props.iterations):
+            props.time += props.deltaTime
+            distanceTransfer = plateauProfile(props.time, dists, props.m1, props.m2, props.plateauHeight)
+            heightTransfer = sigmoid(XYZ[:, 2], 1.0, 0.3)
+            XYZ[:, 2] += props.baseUplift * speedTransfer * heightTransfer * distanceTransfer * props.deltaTime
+            XYZ[:, 2] -= (0.2 * XYZ[:, 2] / props.plateauHeight)**2
+
+        for i, v in enumerate(terrainBM.verts):
+            v.co.z = XYZ[i, 2]
+
+        '''
+        bpy.ops.object.mode_set(mode='EDIT')
+        terrain.select_set(True)
+
+        frontId = terrainBM.verts.layers.int.get('id')
+        vertexSpeed = terrainBM.verts.layers.float.get('speed')
+
+        for i, v in enumerate(terrainBM.verts):
+            v.co.z += speeds[i] / (1 + dists[i])
         
-        #Create a bmesh object for the planet
-        planet = bpy.data.objects.get(props.planetID)
-        planetBM = bmesh.new()
-        planetBM.from_mesh(planet.data)
+        '''
 
-        #We get and/or calculate custom vertex property layers
-        #This allows us to save data on every vertex within blender
-        frontId, distances, vertexSpeed = getCustomVertexLayers(props, planetBM, frontsBM)
-
-        #A list of range of influences for each subduction front
-        influenceRange = getSubductionRangeOfInfluence(planetBM, frontId, props, frontsBM)
-
-        #forTestingPurposes(planetBM)
-
-        #Main loop for subduction uplift
-        for v in planetBM.verts:
-            dist = v[distances]
-            index = v[frontId]
-            speed = v[vertexSpeed]
-            infRange = influenceRange[index]
-            distTrans = getDistanceTransfer(dist, infRange)
-            heightTrans = getHeightTransfer(props, v)
-
-            #Main equation as described in paper
-            uplift = baseUp * distTrans * heightTrans * speed
-            v = moveAlongRadialDirection(v, uplift)
-        
         #Register changes made to blender
-        planetBM.to_mesh(planet.data)
-        planetBM.free()
-        planet.select_set(True)
-        return{"FINISHED"}
+        terrain.select_set(True)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        terrainBM.to_mesh(terrain.data)
+        terrainBM.free()
+
+        return {"FINISHED"}
 
 
-def forTestingPurposes(planetBM):
-    r = [np.sqrt(v.co.x**2 + v.co.y**2 + v.co.z**2) for v in planetBM.verts]
-    average = sum(r) / len(r)
-    print('{}, {}, {}'.format(min(r), max(r), average))
+
+#We use a sigmoid function for the height transfer
+def sigmoid(x, mean, spread):
+    return 1 / (1 + np.exp( - (x - mean) / spread))
+
+
+#Here we stitch a bunch of line equations together to define the distance transfer
+def plateauProfile(t, x, m1, m2, maxHeight):
+    m2 = np.abs(m2)
+    y = np.zeros(x.shape)
+    if (m1 * t > maxHeight):
+        isFirstPartOfCurve = (x * m1 < maxHeight)
+        firstPart = x * m1 * isFirstPartOfCurve
+        
+        plateauLength = m1 * t - maxHeight
+        isSecondPartOfCurve = (x * m1 >= maxHeight) * (x * m1 < (maxHeight + plateauLength))
+        secondPart = np.ones(x.shape) * maxHeight * isSecondPartOfCurve
+        
+        xTransition = (maxHeight + plateauLength) / m1
+        isThirdPartOfCurve = (x * m1 >= (maxHeight + plateauLength))
+        thirdPart = ( - x * m2 + m2 * xTransition + maxHeight) * isThirdPartOfCurve
+        
+        y = firstPart + secondPart + thirdPart
+        y *= (y >= 0)
+        
+    else:
+        isFirstPartOfCurve = (x < t)
+        firstPart = x * m1 * isFirstPartOfCurve
+        
+        isSecondPart = (1 - isFirstPartOfCurve)
+        secondPart = ( - m2 * x + t * m1 + m2 * t) * isSecondPart
+        
+        y = firstPart + secondPart
+        y *= (y >= 0)
+    return y
 
 
 
@@ -206,6 +244,7 @@ def splitBezierCurveToMesh(defaultCollection):
     for obj in selectedObjects:
         obj.select_set(False)
 
+
 #Create a list of bmesh objects for each subduction front
 #Bmesh allows for mesh manipulations within python code
 def getSubfrontBMeshes(subFrontCollection):
@@ -216,18 +255,6 @@ def getSubfrontBMeshes(subFrontCollection):
         newBM.from_mesh(front.data)
         frontsBM.append(newBM)
     return frontsBM
-
-#For each subduction front, we create a quaternion to represent the plate velocity of nearby vertices
-def getQuaternions(frontsBM, props):
-    axii, quaternions = [], []
-    for front in frontsBM:
-        front.verts.ensure_lookup_table()
-        start = front.verts[0].co
-        end = front.verts[-1].co
-        axes = end - start
-        axii.append(axes)
-        quaternions.append(M.Quaternion(axes, radians(props.plateSpeed)))
-    return axii, quaternions
 
 #For each subfuction front, we create a kd-tree for faster spacial searches
 def getKDTrees(frontsBM):
@@ -240,21 +267,46 @@ def getKDTrees(frontsBM):
         subFrontsKDTrees.append(kd)
     return subFrontsKDTrees
 
-def getCustomVertexLayers(props, planetBM, frontsBM):
-    if 'dist' not in planetBM.verts.layers.float.keys():
-        frontId = planetBM.verts.layers.int.new('id')
-        distances = planetBM.verts.layers.float.new('dist')
-        vertexSpeed = planetBM.verts.layers.float.new('speed')
-        calculateCustomVertexLayers(props, planetBM, frontsBM, frontId, distances, vertexSpeed)
+def getAxii(frontsBM):
+    axii = []
+    for front in frontsBM:
+        front.verts.ensure_lookup_table()
+        axii.append(front.verts[-1].co - front.verts[0].co)
+    return axii
+
+def getCustomVertexLayers(props, terrainBM, frontsBM):
+    if 'dist' not in terrainBM.verts.layers.float.keys():
+        frontId = terrainBM.verts.layers.int.new('id')
+        distances = terrainBM.verts.layers.float.new('dist')
+        vertexSpeed = terrainBM.verts.layers.float.new('speed')
+        calculateCustomVertexLayers(props, terrainBM, frontsBM, frontId, distances, vertexSpeed)
     else:
-        frontId = planetBM.verts.layers.int.get('id')
-        distances = planetBM.verts.layers.float.get('dist')
-        vertexSpeed = planetBM.verts.layers.float.get('speed')
-    return frontId, distances, vertexSpeed
+        frontId = terrainBM.verts.layers.int.get('id')
+        distances = terrainBM.verts.layers.float.get('dist')
+        vertexSpeed = terrainBM.verts.layers.float.get('speed')
+
+    #Create numpy arrays for each vertex layer
+    ids = np.array([v[frontId] for v in terrainBM.verts])
+    dists = np.array([v[distances] for v in terrainBM.verts])
+    speeds = np.array([v[vertexSpeed] for v in terrainBM.verts])
+
+    return ids, dists, speeds
+
+def getSubFrontTangents(frontsBM):
+    tangents = []
+    for front in frontsBM:
+        tangs = []
+        for i in range(len(front.verts) - 1):
+            tangs.append(front.verts[i+1].co - front.verts[i].co)
+        tangs.append(tangs[-1])
+        tangents.append(tangs)
+    return tangents
+
 
 def calculateCustomVertexLayers(props, planetBM, frontsBM, frontId, distances, vertexSpeed):
     subFrontsKDTrees = getKDTrees(frontsBM)
-    axes, quaternions = getQuaternions(frontsBM, props)
+    axes = getAxii(frontsBM)
+    tangents = getSubFrontTangents(frontsBM)
 
     #We calculate and set values for our custom vertex layers
     for v in planetBM.verts:
@@ -262,115 +314,40 @@ def calculateCustomVertexLayers(props, planetBM, frontsBM, frontId, distances, v
         #List of results from the kd.find() function for each front
         kdFinds = [list(kd.find(v.co)) for kd in subFrontsKDTrees]
 
-        #We find the front index corresponding to the closest subduction front
+        #We get the distants and ID of the closest vert in subfronts
         distants = [fnd[2] for fnd in kdFinds]
-        dist, idx = min((dist, idx) for (idx, dist) in enumerate(distants))
+        closestVertsID = [fnd[1] for fnd in kdFinds]
 
-        #The front ID is used to label which front a particular vertex belongs to
-        v[frontId] = idx
-        v[distances] = dist
+        #For each subduction front, we check if v is on the left hand side of it
+        isLeft, dots = [], []
+        for i, vertID in enumerate(closestVertsID):
+            fromFrontToV = frontsBM[i].verts[vertID].co - v.co
+            crossWithTangents = fromFrontToV.cross(tangents[i][vertID]).normalized()
+            dot = crossWithTangents.dot(v.normal)
+            isLef = (dot >= 0)
+            dots.append(dot)
+            isLeft.append(isLef)
 
-        #Calculate the vertex speed and store as a vertex custom property layer
-        closestFrontCo = (kdFinds[idx][0]).normalized()
-        vertToAx = (v.co - axes[idx]).normalized()
-        v[vertexSpeed] = closestFrontCo.dot(vertToAx) * props.plateSpeed
+        distants = [dis for i, dis in enumerate(distants) if isLeft[i]]
 
+        if not distants:
+            v[frontId] = -1
+            v[distances] = 10000000
+            v[vertexSpeed] = 0
+        else:
+            dist, idx = min((dist, idx) for (idx, dist) in enumerate(distants))
+            closestFrontCo = (kdFinds[idx][0]).normalized()
+            vertID = closestVertsID[idx]
 
-
-
-
-
-
-#========================Functions for Subduction Uplift ====================================
-
-def getSpeedTransfer(props):
-    pSpeed = props.plateSpeed
-
-
-def getHeightTransfer(props, v):
-    initH = props.radius
-    maxHeight = props.plateauHeightLim
-    heightAboveInit = sqrt(v.co.x**2 + v.co.y**2 + v.co.z**2) - initH + 0.01
-    normalizedHeight = heightAboveInit / maxHeight
-    if normalizedHeight > 1.0:
-        normalizedHeight = 1.0
-
-    heightTransCurve = bpy.data.node_groups['ProfileCurves'].nodes['Height Transfer'].mapping
-    curve = heightTransCurve.curves[3]
-
-    if (normalizedHeight <= 1.0):
-        curveSamplePoint = heightTransCurve.evaluate(curve, normalizedHeight)
-    else:
-        #pass
-        curveSamplePoint = - heightTransCurve.evaluate(curve, normalizedHeight % 1)
-    hTran = curveSamplePoint * maxHeight #* 4
-    #print(hTran)
-    return hTran
+            #The front ID is used to label which front a particular vertex belongs to
+            v[frontId] = idx
+            v[distances] = dist
+            v[vertexSpeed] = np.sin(np.arccos(closestFrontCo.dot(axes[idx].normalized()))) * props.plateSpeed
 
 
-def moveAlongRadialDirection(v, dr):
-    r, theta, phi = getPolarCoords(v.co.x, v.co.y, v.co.z)
-    v.co.x += sin(theta) * cos(phi) * dr
-    v.co.y += sin(theta) * sin(phi) * dr
-    v.co.z += cos(theta) * dr
-    return v
-
-#Coordinate transformation function from cartesian to polar
-def getPolarCoords(X, Y, Z):
-    R = np.sqrt(X**2 + Y**2 + Z**2)
-    Theta = np.arccos(Z / R)
-    Phi = np.arctan2(Y, X)    
-    return (R, Theta, Phi)
-
-
-#Sample a point from the distance transfer curve editor      
-def getDistanceTransfer(dist, infRange):
-    distTransCurve = bpy.data.node_groups['ProfileCurves'].nodes['Distance Transfer'].mapping
-    curve = distTransCurve.curves[3]
-
-    samplePoint = dist / infRange
-    if (samplePoint > 1):
-        samplePoint = 1
-        #print('Dist: {}, InfRange: {}'.format(dist, infRange))
-    else:
-        pass
-        #print('Dist: {}, InfRange: {}'.format(dist, infRange))
-
-    #distTransCurve.initialize()
-    return distTransCurve.evaluate(curve, samplePoint)
-
-
-
-#Depending on how high a mountain range is, the range of subduction influence needs to be calculated accordingly
-#The larger a moutain range, the larger the influence
-#We use the volume of the mountain range that is above the initial world radius to calculate the range of influence
-def getSubductionRangeOfInfluence(planetBM, frontId, props, frontsBM):
-    
-    #Get relevant properties
-    initH = props.radius
-    maxRange = props.influenceRangeMax
-    minRange = props.influenceRangeMin
-    listLength = len(frontsBM)
-
-    volumeAboveInitialHeight = [0 for i in range(listLength)]
-    totalArea = [0 for i in range(listLength)]
-    for f in planetBM.faces:
-        index = f.verts[0][frontId]
-        area = f.calc_area()
-        heightDiff = sum([(v.co.x**2 + v.co.y**2 + v.co.z**2)**0.5 - initH for v in f.verts]) / len(f.verts)
-        volumeAboveInitialHeight[index] += area * heightDiff
-        totalArea[index] += area
-
-    maxHeight = props.plateauHeightLim
-    maxVolume = [area * maxHeight for area in totalArea]
-    proportion = [(volumeAboveInitialHeight[i] / maxVolume[i])**0.6 for i in range(listLength)]
-    print(proportion)
-    influenceRange = [minRange + (maxRange - minRange) * proportion[i] for i in range(listLength)]
-    return influenceRange
 
 
 #===============================Panels ====================================================================
-
 class TectonicToolsMainPanel:
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -409,8 +386,8 @@ class OBJECT_PT_InitialProperties(TectonicToolsMainPanel, Panel):
         layout = self.layout
         scene = context.scene
         props = scene.properties
-        
-        layout.prop(props, "radius")
+
+        layout.prop(props, "meshSize")
         layout.prop(props, "subDivs")
         layout.prop(props, "initHeight")
         layout.prop(props, "noiseFreq")
@@ -424,66 +401,29 @@ class OBJECT_PT_SubductionProperties(TectonicToolsMainPanel, Panel):
         scene = context.scene
         props = scene.properties
 
-        layout.prop(props, "deltaTime")
-        layout.prop(props, "plateSpeed")
-        layout.prop(props, "plateauHeightLim")
-        layout.prop(props, "influenceRangeMax")
-        layout.prop(props, "influenceRangeMin")
         layout.prop(props, "baseUplift")
+        layout.label(text="Time Elapsed: {:.2f}".format(props.time))
+        layout.prop(props, "deltaTime")
+        layout.prop(props, "iterations")
+        layout.prop(props, "plateSpeed")
 
-        #Node groups are used to store profile curves, 
-        #and profile curves are used to allow the user to custimize functions within the code (Eg. Distance Transfer) 
-        if 'ProfileCurves' not in bpy.data.node_groups:
-        	bpy.data.node_groups.new('ProfileCurves', 'ShaderNodeTree')
-        curveTree = bpy.data.node_groups['ProfileCurves'].nodes
-        
-        #Curves for custimizing the distance transfer function
-        layout.label(text="Subduction Uplift Distance Transfer")
-        if "Distance Transfer" in curveTree.keys():
-        	layout.template_curve_mapping(curveTree["Distance Transfer"], "mapping")
+        layout.label(text="Used for Distance Transfer")
+        layout.prop(props, "m1")
+        layout.prop(props, "m2")
+        layout.prop(props, "plateauHeight")
 
-        #Curves for custimizing the height transfer function
-        layout.label(text="Height Transfer")
-        if "Height Transfer" in curveTree.keys():
-            layout.template_curve_mapping(curveTree["Height Transfer"], "mapping")
-
-
-def initializeProfileCurves():
-    if 'ProfileCurves' not in bpy.data.node_groups:
-        bpy.data.node_groups.new('ProfileCurves', 'ShaderNodeTree')
-    
-    nods = bpy.data.node_groups['ProfileCurves'].nodes
-    if "Distance Transfer" not in nods.keys():
-        distCurves = nods.new('ShaderNodeRGBCurve')
-        distCurves.name = "Distance Transfer"
-        pnts = distCurves.mapping.curves[3].points
-        pnts[0].location = [0.0, 0.8]
-        pnts[1].location = [1.0, 0.0]
-        pnts.new(0.2, 1.0)
-        pnts.new(0.75, 0.15)
-
-    if "Height Transfer" not in nods.keys():
-        distCurves = nods.new('ShaderNodeRGBCurve')
-        distCurves.name = "Height Transfer"
-        pnts = distCurves.mapping.curves[3].points
-        pnts[0].location = [0.0, 0.0]
-        pnts[1].location = [0.5, 0.25]
-        pnts.new(0.75, 1.0)
-        pnts.new(0.8, 0.75)
-        pnts.new(0.9, 0.125)
-        pnts.new(1.0, 0.0)
-
+        layout.label(text="Used For Height Transfer")
 
 #=============================Register Classes to Blender ================================================
 classes = (
     GeneratorProperties,
     WM_OT_Initiate,
+    WM_OT_AddSubFront,
+    WM_OT_RunSubduction,
     OBJECT_PT_GeneratorPanel,
     OBJECT_PT_Buttons,
     OBJECT_PT_InitialProperties,
-    OBJECT_PT_SubductionProperties,
-    WM_OT_AddSubFront,
-    WM_OT_RunSubduction
+    OBJECT_PT_SubductionProperties
 )
 
 def register():

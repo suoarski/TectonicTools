@@ -20,7 +20,6 @@ from bpy.types import (
     PropertyGroup
     )
 
-
 class GeneratorProperties(PropertyGroup):
 
     #Properties for the initial terrain. These will be passed onto ANT Landscape
@@ -91,6 +90,8 @@ class WMTPlateProperties(PropertyGroup):
 #A collection of pointers that point towards each instance of WMTPlateProperties created
 class WMTPlatePointers(PropertyGroup):
     ids: bpy.props.CollectionProperty(type=WMTPlateProperties)
+
+
 
 
 

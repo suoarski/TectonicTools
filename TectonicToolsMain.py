@@ -24,24 +24,74 @@ from bpy.types import (
 class GeneratorProperties(PropertyGroup):
 
     #Properties for the initial terrain. These will be passed onto ANT Landscape
-    subDivs: IntProperty(name="Mesh Subdivisions", default=512, min=1, max=100000)  
-    meshSize: FloatProperty(name="Mesh Size", default=20, min=0.1, max=100000)
-    radius: FloatProperty(name="Sphere Radius", default=6, min=0.1, max=10000)
-    initHeight: FloatProperty(name="Initial Noise Height", default=0.25, min=0.01, max=10000)
-    noiseFreq: FloatProperty(name="Initial Noise Frequency", default=1, min=0.01, max=1000)
-    isSphere: BoolProperty(name="Spherical Terrain", default=True)
+    subDivs: IntProperty(name="Mesh Subdivisions", 
+        description="Defines the resolution of the mesh",
+        default=512, 
+        min=1,
+        max=100000)  
+
+    meshSize: FloatProperty(
+        name="Mesh Size", 
+        description="Defines the size a flat terrain grid will be",
+        default=20, 
+        min=0.1, 
+        max=100000)
+
+    radius: FloatProperty(
+        name="Sphere Radius",
+        description="Defines the radius of the spherical planet",
+        default=6, 
+        min=0.1, 
+        max=10000)
+
+    initHeight: FloatProperty(
+        name="Initial Noise Height", 
+        description="How high the initial noise will be",
+        default=0.25, 
+        min=0.01, 
+        max=10000)
+
+    noiseFreq: FloatProperty(
+        name="Initial Noise Frequency", 
+        description="Defines how 'close' mountains will be",
+        default=1, 
+        min=0.01, 
+        max=1000)
+
+    isSphere: BoolProperty( 
+        name="Spherical Terrain", 
+        description="Use a spherical terrain",
+        default=True)
 
     #Identifiers so that we can retrieve relevant data throughout code
-    terrainID: StringProperty(name="Terrain Identifier")
+    terrainID: StringProperty(
+        name="Terrain Identifier",
+        )
 
     #Properties to be used in subduction uplift
-    time: FloatProperty(name="Time (Million Years)", default=0, min=0, max=10000000)
-    deltaTime: FloatProperty(name="Time Steps (dt)", default=0.05, min=0.0001, max=10000)
-    iterations: IntProperty(name="Iterations Per Click", default=10, min=1, max=100000)
+    time: FloatProperty(
+        name="Time (Million Years)", 
+        default=0, 
+        min=0, 
+        max=10000000)
+
+    deltaTime: FloatProperty(
+        name="Time Steps",
+        description="Defines how much time passes at each iteration of the simulation",
+        default=0.05, 
+        min=0.0001, 
+        max=10000)
+
+    iterations: IntProperty(
+        name="Iterations Per Click",
+        description="Defines how many iterations the simulation will run for each time the user clicks Move Tectonic Plates",
+        default=20, 
+        min=1, 
+        max=100000)
 
     baseUplift: FloatProperty(
-        name="Base Subduction Uplift", 
-        description = "Determines how fast mountains grow vertically",
+        name="Base Uplift", 
+        description = "Determines how fast mountains grows.",
         default=24.0, 
         min=0.0001, 
         max=100000
@@ -49,23 +99,23 @@ class GeneratorProperties(PropertyGroup):
 
     m1: FloatProperty(
         name="Slope Going Up From Front",
-        description="Defines how steep the slope is near the subduction front",
-        default=0.1,
-        min=0.01,
+        description="Defines how steep the slope is near the subduction front (Given as a percent)",
+        default=10,
+        min=0.0001,
         max=1000
         )
 
     m2: FloatProperty(
         name="Slope Going Down", 
-        description="Defines how steep the slope is on the other side of the mountain from the subduction front",
-        default=0.02, 
+        description="Defines how steep the slope is on the other side of the mountain from the subduction front (Given as a percent)",
+        default=2, 
         min=0.00001, 
         max=1000
         )
 
     plateauHeight: FloatProperty(
         name="Plateau Height",
-        description="The heigh after which the distance transfer begins to form a plateaux",
+        description="The height after which mountains begin to form plateaus (not to scale)",
         default=0.07, 
         min=0.01, 
         max=100000
@@ -74,7 +124,7 @@ class GeneratorProperties(PropertyGroup):
     spreadRate: FloatProperty(
         name = "Spread Rate",
         description = "How fast a mountain range spreads from the subduction boundary",
-        default = 0.2,
+        default = 0.3,
         min = 0,
         max = 10000000
         )
@@ -100,12 +150,35 @@ class GeneratorProperties(PropertyGroup):
         )
 
     #Properties for managing tectonic plates
-    plateNums: IntProperty(name="Number Of Plates", default=0, min=0, max=200)
-    newPlateAxes: FloatVectorProperty(name="Plate Rotation Axes")
-    newPlateSpeed: FloatProperty(name="Plate Speed", default=0.05)
-    newPlateIsContinental: BoolProperty(name="Is Continental Plate", default=True)
-    randomizeProperties: BoolProperty(name="Randomize Plate Axes", default=True)
-    movePlates: BoolProperty(name="Move Tectonic Plates", default=False)
+    plateNums: IntProperty(
+        name="Number Of Plates", 
+        default=0, 
+        min=0, 
+        max=200)
+
+    newPlateAxes: FloatVectorProperty(
+        name="Plate Rotation Axes",
+        description="The axis that the new tectonic plate will rotate about",
+        )
+
+    newPlateSpeed: FloatProperty(
+        name="Plate Speed",
+        description="How fast the new plate will move along the sphere. Units are in minutes per iteration (There are 60 minutes in a degree)", 
+        default=0.02)
+
+    newPlateIsContinental: BoolProperty(
+        name="Is Continental Plate",
+        description="Mountains will only form on continental plates",
+        default=True)
+
+    randomizeProperties: BoolProperty(
+        name="Randomize Plate Axes", 
+        default=True)
+
+    movePlates: BoolProperty(
+        name="Move Tectonic Plates",
+        description="Specifies whether to actually move the plates along the sphere. If unchecked, the mountains will still grow, but the plates will remain stationary.",
+        default=True)
 
     #Properties for the auto plate generator
     autoCreateIsSelected: BoolProperty(
@@ -116,7 +189,7 @@ class GeneratorProperties(PropertyGroup):
     numOfPlatesToCreate: IntProperty(
         name="Number of Plates", 
         description="Number of Plates to create using Voronoi tesselation",
-        default=10)
+        default=16)
 
     boundAmp: FloatProperty(
         name="Boundary Amplitude",
@@ -136,7 +209,7 @@ class GeneratorProperties(PropertyGroup):
     noiseType: EnumProperty(
         name="Noise Type",
         default='hetero_terrain',
-        description="Noise type",
+        description="The type of noise to be used for the initial landscape",
         items = [
             ('multi_fractal', "Multi Fractal", "Blender: Multi Fractal algorithm", 0),
             ('ridged_multi_fractal', "Ridged MFractal", "Blender: Ridged Multi Fractal", 1),
@@ -247,8 +320,8 @@ class WM_OT_AutoPlates(Operator):
                     120 * np.random.random() - 60,
                     120 * np.random.random() - 60)).normalized()
 
-            plate.rotationSpeed = 2 * props.newPlateSpeed * np.random.random()
-            plate.isContinental = np.random.choice([True, False, False])
+            plate.rotationSpeed = 2 * props.newPlateSpeed * np.random.random() / 60
+            plate.isContinental = np.random.choice([True, False])
 
             cent = np.random.choice(terrainBM.verts).co
             plate.centroid = cent
@@ -285,15 +358,16 @@ class WM_OT_AddPlate(Operator):
 
         #Add a new plate and update changes made
         addNewPlate(props, terrain, terrainBM)
+        recalculatePlateCentroids(props, terrain, terrainBM)
+
         bmesh.update_edit_mesh(terrain.data)
         return{"FINISHED"}
-
 
 
 class WM_OT_MovePlates(Operator):
     bl_label = "Move Tectonic Plates"
     bl_idname = "wm.move_plates"
-    bl_description = "Move all tectonic plates and run the simulation for a few steps. Note that the first time clicking this button will be the slowest."
+    bl_description = "Move all tectonic plates and run the simulation for a few steps. Note that the first time running this operator will be the   ."
     def execute(self, context):
         scene = context.scene
         props = scene.properties
@@ -344,7 +418,9 @@ class WM_OT_MovePlates(Operator):
             distanceTransfer = plateauProfile(props, dists)
             heightTransfer = np.interp(heights, xTrans, yTrans)
 
-            dR = props.baseUplift * distanceTransfer * heightTransfer * isContinent * props.deltaTime
+            #dR = 0.1 * speeds * isContinent
+            
+            dR = props.baseUplift * distanceTransfer * heightTransfer * isContinent * speeds * props.deltaTime
             dR -= (heights > props.degrowthThreshold) * (props.degrowthConst * (heights - 0.3 * props.degrowthThreshold))**2
 
             X += np.sin(Theta) * np.cos(Phi) * dR
@@ -379,8 +455,8 @@ def sigmoid(x, mean, spread):
 def plateauProfile(props, x):
 
     t = props.time * props.spreadRate
-    m1 = props.m1
-    m2 = props.m2
+    m1 = props.m1 / 100
+    m2 = props.m2 / 100
     maxHeight = props.plateauHeight
 
 
@@ -433,9 +509,7 @@ def calculateCustomVertexLayers(props, terrainBM, distances, vertexSpeed, plateP
     plateId = terrainBM.verts.layers.int.get('id')
     rotationQuats = [M.Quaternion(i.rotationAxes, radians(i.rotationSpeed)) for i in plateProps]
     rotationSpeeds = [i.rotationSpeed for i in plateProps]
-
-    print(rotationQuats)
-    print(rotationSpeeds)
+    plateCentroids = [i.centroid for i in plateProps]
     
     #If the two vertices at the end of an edge are not on the same plate, we have found a plate boundary
     subFrontEdges, frontEdges = [], []
@@ -446,7 +520,6 @@ def calculateCustomVertexLayers(props, terrainBM, distances, vertexSpeed, plateP
             vert1 = e.verts[1]
             quat0 = rotationQuats[vert0[plateId]]   
             quat1 = rotationQuats[vert1[plateId]]
-            
 
             frontSpeed = ((quat0 @ vert0.co - quat1 @ vert1.co).length - (vert0.co - vert1.co).length)
 
@@ -464,32 +537,44 @@ def calculateCustomVertexLayers(props, terrainBM, distances, vertexSpeed, plateP
         kdTree.insert(edgeCenter, i)
     kdTree.balance()
 
-
     for v in terrainBM.verts:
-        distancess, edgeCos = [], []
+        edgeCos, edgeID, distancess = [], [], []
         for (edgeCo, index, dist) in kdTree.find_n(v.co, props.numToAverage):
-            distancess.append(dist)
             edgeCos.append(edgeCo)
+            edgeID.append(index)
+            distancess.append(dist)
 
-        edgXYZ = np.array(edgeCos)
-        aveXYZ = np.sum(edgXYZ, axis=0) / edgXYZ.shape[0]
-        PedgXYZ = edgXYZ - aveXYZ
-        eigValues, eigVectors = np.linalg.eig(np.matmul(edgXYZ.T, PedgXYZ))
-        largerstEigenvector = eigVectors[np.argmax(eigValues)]
 
-        frontHeading = (quat0 @ vert0.co - vert0.co).normalized() - (quat1 @ vert1.co - vert1.co).normalized()
-        frontHeading = np.array(frontHeading)
-        speedMultiplier = 1 - np.abs(np.dot(largerstEigenvector, frontHeading))
+        plateQuat = rotationQuats[v[plateId]]
+        axis, angle = plateQuat.to_axis_angle()
+        axis = axis.normalized()
+        axis = np.array(axis)
+
+        cent = plateCentroids[v[plateId]]
+        vCo = np.array(v.co)
+        speed = np.linalg.norm((cent - vCo) - np.dot(cent - vCo, axis) * axis)
+
+
+        fromCentToPoint = vCo - cent
+        crossProd = np.cross(fromCentToPoint, axis)
+        dotProd = np.dot(vCo, crossProd)
+        speed = sigmoid(speed * dotProd, 0, 5)
 
         v[distances] = sum(distancess) / len(distancess)
-        v[vertexSpeed] = rotationSpeeds[v[plateId]] * speedMultiplier
+        v[vertexSpeed] = speed 
+
+        
+
+
+
+
 
 #When adding a new plate, we create a new instance of WMTPlatePointers (plate properties)
 #And update the vertex layer "plateId"
 def addNewPlate(props, terrain, terrainBM):
     plate = terrain.data.WMTPlatePointers.ids.add()
     plate.rotationAxes = props.newPlateAxes
-    plate.rotationSpeed = props.newPlateSpeed
+    plate.rotationSpeed = props.newPlateSpeed / 60
     plate.isContinental = props.newPlateIsContinental
     plate.centroid = np.random.choice(terrainBM.verts).co
 
@@ -512,6 +597,25 @@ def addNewPlate(props, terrain, terrainBM):
 
     #Increase the total number of plates
     props.plateNums += 1
+
+
+def recalculatePlateCentroids(props, terrain, terrainBM):
+    plateProps = terrain.data.WMTPlatePointers.ids
+    plateId = terrainBM.verts.layers.int.get('id')
+    coordSum = np.zeros((len(plateProps), 3))
+    coordCount = np.zeros(len(plateProps))
+
+    for v in terrainBM.verts:
+        xyz = np.array([v.co.x, v.co.y, v.co.z])
+        coordSum[v[plateId]] += xyz
+        coordCount[v[plateId]] += 1
+        v.select = False
+
+    coordAves = coordSum.T / coordCount
+    coordAves = coordAves.T
+
+    for i, plate in enumerate(plateProps):
+        plate.centroid = M.Vector((coordAves[i]))
 
 
 
@@ -552,7 +656,7 @@ class OBJECT_PT_InitialProperties(TectonicToolsMainPanel, Panel):
         scene = context.scene
         props = scene.properties
 
-        layout.prop(props, "isSphere")
+        #layout.prop(props, "isSphere")
         if props.isSphere:
             layout.prop(props, "radius")
         else:
@@ -578,6 +682,7 @@ class OBJECT_PT_PlateProperties(TectonicToolsMainPanel, Panel):
             layout.prop(props, "numOfPlatesToCreate")
             layout.prop(props, "boundAmp")
             layout.prop(props, "boundFreq")
+            layout.prop(props, "newPlateSpeed")
             
         else:
             layout.prop(props, "randomizeProperties")
@@ -590,7 +695,7 @@ class OBJECT_PT_PlateProperties(TectonicToolsMainPanel, Panel):
 
 class OBJECT_PT_SubductionProperties(TectonicToolsMainPanel, Panel):
     bl_parent_id = "OBJECT_PT_generatorPanel"
-    bl_label = "Subduction Properties"  
+    bl_label = "Simulation Properties"  
     def draw(self, context):
         layout = self.layout
         scene = context.scene
@@ -602,18 +707,15 @@ class OBJECT_PT_SubductionProperties(TectonicToolsMainPanel, Panel):
         layout.prop(props, "iterations")
         layout.prop(props, "movePlates")
 
-        layout.label(text="Used for Distance Transfer")
+        layout.label(text="Uplift Properties")
         layout.prop(props, "m1")
         layout.prop(props, "m2")
         layout.prop(props, "plateauHeight")
-
-        layout.label(text="Used For Height Transfer")
-
-        layout.label(text="Advanced Properties")
-        layout.prop(props, "numToAverage")
         layout.prop(props, "degrowthConst")
         layout.prop(props, "degrowthThreshold")
         layout.prop(props, "spreadRate")
+        layout.prop(props, "numToAverage")
+        
 
         #Node groups are used to store profile curves, 
         #and profile curves are used to allow the user to custimize functions within the code (Eg. Distance Transfer) 
